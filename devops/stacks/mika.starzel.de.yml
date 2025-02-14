@@ -139,7 +139,7 @@ services:
         - traefik.http.services.svc-backend.loadbalancer.server.port=8080
         # Middleware
         ## VHM points to /Plone
-        - "traefik.http.middlewares.mw-backend-vhm-classic.addprefix.prefix=/VirtualHostBase/http/mika.starzel.de/Plone/VirtualHostRoot/"
+        - "traefik.http.middlewares.mw-backend-vhm-classic.addprefix.prefix=/VirtualHostBase/https/mika.starzel.de/Plone/VirtualHostRoot/"
 
         # Routes
         ## Router: from Varnish to backend (internal)
