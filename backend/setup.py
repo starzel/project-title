@@ -60,6 +60,7 @@ setup(
             "zest.releaser[recommended]",
             "zestreleaser.towncrier",
             "plone.app.testing",
+            "plone.app.robotframework",
             "pytest",
             "pytest-cov",
             "pytest-plone>=0.5.0",

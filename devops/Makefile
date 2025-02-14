@@ -57,14 +57,14 @@ clean: ## remove all build, test, coverage and Python artifacts
 bin/pip:
 	@echo "$(GREEN)==> Python: Setup Virtual Env$(RESET)"
 	python3 -m venv .
-	bin/pip install -U pip pipx
+	bin/pip install -U pip pipx uv
 
 bin/ansible:
 
 .PHONY: setup
 setup: bin/pip ## Ansible: Install Ansible and dependencies
 	@echo "$(GREEN)==> Ansible: Install Ansible and dependencies $(RESET)"
-	bin/pip install -r requirements/requirements.txt --upgrade
+	bin/uv pip install -r requirements/requirements.txt --upgrade
 	bin/ansible-galaxy install -r requirements/roles.yml --force --no-deps
 	bin/ansible-galaxy collection install -r requirements/collections.yml
 
@@ -101,7 +101,7 @@ stack-create-site: ## Create a new site stacks: $(STACK_NAME)
 .PHONY: stack-status
 stack-status: ## Check status of stack
 	@echo "$(GREEN)==> Stack $(STACK_NAME): Status in context $(DEPLOY_ENV) $(RESET)"
-	${DOCKER_CMD_CONTEXT} stack ps -f "desired-state=running" $(STACK_NAME)
+	${DOCKER_CMD_CONTEXT} stack ps --no-trunc -f "desired-state=running" $(STACK_NAME)
 
 .PHONY: stack-logs-webserver
 stack-logs-webserver: ## Display webserver logs

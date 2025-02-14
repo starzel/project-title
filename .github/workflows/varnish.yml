@@ -55,7 +55,7 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v4
         with:
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64
           context: devops/varnish
           file: devops/varnish/Dockerfile
           push: ${{ github.event_name != 'pull_request' }}
