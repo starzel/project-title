@@ -1,0 +1,96 @@
+---
+name: project-title
+
+services:
+  traefik:
+    image: traefik:v2.11
+
+    ports:
+      - 80:80
+
+    labels:
+      - traefik.enable=true
+      - traefik.constraint-label=public
+      - traefik.http.routers.traefik-public-http.rule=Host(`traefik.project-title.localhost`)
+      - traefik.http.routers.traefik-public-http.entrypoints=http
+      - traefik.http.routers.traefik-public-http.service=api@internal
+      - traefik.http.services.traefik-public.loadbalancer.server.port=8000
+
+      # GENERIC MIDDLEWARES
+      - traefik.http.middlewares.gzip.compress=true
+      - traefik.http.middlewares.gzip.compress.excludedcontenttypes=image/png, image/jpeg, font/woff2
+
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+    command:
+      - --providers.docker
+      - --providers.docker.constraints=Label(`traefik.constraint-label`, `public`)
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.http.address=:80
+      - --accesslog
+      - --log
+      - --api
+  purger:
+    image: ghcr.io/kitconcept/cluster-purger:latest
+    platform: linux/amd64
+    environment:
+      PURGER_SERVICE_NAME: varnish
+      PURGER_SERVICE_PORT: 80
+      PURGER_MODE: "compose"
+      PURGER_PUBLIC_SITES: "['project-title.localhost']"
+
+  varnish:
+    build:
+      context: devops/varnish
+    labels:
+      - traefik.enable=true
+      - traefik.constraint-label=public
+      # SERVICE
+      - traefik.http.services.svc-varnish.loadbalancer.server.port=80
+    depends_on:
+      - backend
+
+  backend:
+    build:
+      context: ./backend
+      args:
+        - PLONE_VERSION=${PLONE_VERSION}
+    environment:
+      RELSTORAGE_DSN: "dbname='${DB_NAME:-plone}' user='${DB_NAME:-plone}' host='${DB_HOST:-db}' password='${DB_PASSWORD:-WeZsNHoWaXiY}' port='${DB_PORT:-5432}'"
+    depends_on:
+      - db
+    labels:
+      - traefik.enable=true
+      - traefik.constraint-label=public
+      # Service
+      - traefik.http.services.svc-backend.loadbalancer.server.port=8080
+
+      # Middleware
+      ## VHM points to /Plone
+      - "traefik.http.middlewares.mw-backend-vhm-classic.addprefix.prefix=/VirtualHostBase/http/project-title.localhost/Plone/VirtualHostRoot/"
+
+      # Routers
+      ## Router: From incoming to Varnish (public)
+      - traefik.http.routers.rt-backend-public.rule=Host(`project-title.localhost`)
+      - traefik.http.routers.rt-backend-public.entrypoints=http
+      - traefik.http.routers.rt-backend-public.service=svc-varnish
+      - traefik.http.routers.rt-backend-public.middlewares=gzip
+
+      ## Router: from Varnish to backend (internal)
+      - traefik.http.routers.rt-backend-internal.rule=Host(`project-title.localhost`) && Headers(`X-Varnish-Routed`, `1`)
+      - traefik.http.routers.rt-backend-internal.entrypoints=http
+      - traefik.http.routers.rt-backend-internal.service=svc-backend
+      - traefik.http.routers.rt-backend-internal.middlewares=mw-backend-vhm-classic
+
+  db:
+    image: postgres:14.15
+    environment:
+      POSTGRES_USER: plone
+      POSTGRES_PASSWORD: WeZsNHoWaXiY
+      POSTGRES_DB: plone
+    volumes:
+      - vol-site-data:/var/lib/postgresql/data
+
+volumes:
+  vol-site-data: {}

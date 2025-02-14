@@ -1,0 +1,186 @@
+---
+version: '3.8'
+
+services:
+  traefik:
+    image: traefik:v2.11
+
+    ports:
+      - 80:80
+      - 443:443
+
+    deploy:
+      replicas: 1
+      update_config:
+        parallelism: 1
+        delay: 5s
+        order: start-first
+      labels:
+        - traefik.enable=true
+        - traefik.constraint-label=public
+        - traefik.http.services.traefik-public.loadbalancer.server.port=8000
+        ## Basic Authentication
+        ### Note: all dollar signs in the hash need to be doubled for escaping.
+        ### To create user:password pair, it's possible to use this command:
+        ### echo $(htpasswd -nb user password) | sed -e s/\\$/\\$\\$/g
+        ### Defaults to admin:admin
+        #- traefik.http.middlewares.admin-auth.basicauth.users=admin:$$apr1$$uZPT5Fgu$$AmlIdamxT5ipBvPlsdfD70
+        #- traefik.http.routers.traefik-public-https.rule=Host(`traefik-mika.starzel.de`)
+        #- traefik.http.routers.traefik-public-https.entrypoints=https
+        #- traefik.http.routers.traefik-public-https.tls=true
+        #- traefik.http.routers.traefik-public-https.service=api@internal
+        #- traefik.http.routers.traefik-public-https.middlewares=admin-auth
+
+        # GENERIC MIDDLEWARES
+        - traefik.http.middlewares.https-redirect.redirectscheme.scheme=https
+        - traefik.http.middlewares.https-redirect.redirectscheme.permanent=true
+        - traefik.http.middlewares.gzip.compress=true
+        - traefik.http.middlewares.gzip.compress.excludedcontenttypes=image/png, image/jpeg, font/woff2
+
+        # GENERIC ROUTERS
+        - traefik.http.routers.generic-https-redirect.entrypoints=http
+        - traefik.http.routers.generic-https-redirect.rule=HostRegexp(`{host:.*}`)
+        - traefik.http.routers.generic-https-redirect.priority=1
+        - traefik.http.routers.generic-https-redirect.middlewares=https-redirect
+
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - vol-traefik-certs:/certificates
+
+    command:
+      - --providers.docker
+      - --providers.docker.constraints=Label(`traefik.constraint-label`, `public`)
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.swarmmode
+      - --providers.docker.network=mika-starzel-de_nw-internal
+      - --entrypoints.http.address=:80
+      - --entrypoints.https.address=:443
+      - --certificatesresolvers.le.acme.email=collective@plone.org
+      - --certificatesresolvers.le.acme.storage=/certificates/acme.json
+      - --certificatesresolvers.le.acme.tlschallenge=true
+      - --accesslog
+      - --log
+      - --log.level=INFO
+      - --api
+
+    networks:
+      - nw-public
+      - nw-internal
+
+  purger:
+    image: ghcr.io/kitconcept/cluster-purger:latest
+    environment:
+      PURGER_SERVICE_NAME: varnish
+      PURGER_SERVICE_PORT: 80
+      PURGER_PUBLIC_SITES: "['mika.starzel.de']"
+    networks:
+      - nw-internal
+    deploy:
+      replicas: 2
+      update_config:
+        parallelism: 1
+        delay: 5s
+        order: start-first
+
+  varnish:
+    image: ghcr.io/starzel/project-title-varnish:${STACK_PARAM:-latest}
+    command:
+      - '-p'
+      - 'nuke_limit=2000'
+      - '-p'
+      - 'workspace_client=192k'
+      - '-p'
+      - 'workspace_backend=192k'
+    depends_on:
+      - traefik
+      - backend
+    networks:
+      - nw-internal
+    deploy:
+      replicas: 1
+      update_config:
+        parallelism: 1
+        delay: 5s
+        order: start-first
+      labels:
+        - traefik.enable=true
+        - traefik.constraint-label=public
+        # Services
+        - traefik.http.services.svc-varnish.loadbalancer.server.port=80
+        # Routers
+        ## Router: Varnish Public
+        - traefik.http.routers.rt-varnish-public.rule=Host(`mika.starzel.de`)
+        - traefik.http.routers.rt-varnish-public.entrypoints=https
+        - traefik.http.routers.rt-varnish-public.tls=true
+        - traefik.http.routers.rt-varnish-public.tls.certresolver=le
+        - traefik.http.routers.rt-varnish-public.service=svc-varnish
+        - traefik.http.routers.rt-varnish-public.middlewares=gzip
+
+  backend:
+    image: ghcr.io/starzel/project-title-backend:${STACK_PARAM:-latest}
+    environment:
+      RELSTORAGE_DSN: "dbname='${DB_NAME:-plone}' user='${DB_USER:-plone}' host='${DB_HOST:-db}' password='${DB_PASSWORD:-WeZsNHoWaXiY}' port='${DB_PORT:-5432}'"
+    depends_on:
+      - db
+    networks:
+      - nw-public
+      - nw-internal
+    deploy:
+      replicas: 2
+      update_config:
+        parallelism: 1
+        delay: 5s
+        order: start-first
+      labels:
+        - traefik.enable=true
+        - traefik.constraint-label=public
+        # Services
+        - traefik.http.services.svc-backend.loadbalancer.server.port=8080
+        # Middleware
+        ## VHM points to /Plone
+        - "traefik.http.middlewares.mw-backend-vhm-classic.addprefix.prefix=/VirtualHostBase/http/project-title.localhost/Plone/VirtualHostRoot/"
+
+        # Routes
+        ## Router: From incoming to Varnish (public)
+        - traefik.http.routers.rt-backend-public.rule=Host(`project-title.localhost`)
+        - traefik.http.routers.rt-backend-public.entrypoints=http
+        - traefik.http.routers.rt-backend-public.service=svc-varnish
+        - traefik.http.routers.rt-backend-public.middlewares=gzip
+
+        ## Router: from Varnish to backend (internal)
+        - traefik.http.routers.rt-backend-internal.rule=Host(`project-title.localhost`) && Headers(`X-Varnish-Routed`, `1`)
+        - traefik.http.routers.rt-backend-internal.entrypoints=http
+        - traefik.http.routers.rt-backend-internal.service=svc-backend
+        - traefik.http.routers.rt-backend-internal.middlewares=mw-backend-vhm-classic
+
+  db:
+    image: postgres:14.15
+    environment:
+      POSTGRES_USER: plone
+      POSTGRES_PASSWORD: WeZsNHoWaXiY
+      POSTGRES_DB: plone
+    deploy:
+      replicas: 1
+      update_config:
+        parallelism: 1
+        delay: 1s
+        order: stop-first
+    volumes:
+      - vol-site-data:/var/lib/postgresql/data
+    networks:
+      - nw-internal
+
+volumes:
+  vol-traefik-certs: {}
+  vol-site-data:
+    driver_opts:
+      type: none
+      device: "/srv/project-title/data"
+      o: bind
+
+networks:
+  nw-public:
+    external: true
+  nw-internal:
+    internal: true
+    driver: overlay
